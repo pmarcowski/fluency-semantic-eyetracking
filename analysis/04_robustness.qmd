@@ -1,0 +1,206 @@
+---
+title: "Robustness and supplementary analyses"
+subtitle: "Stimulus norming and covariates, sex moderation, cross-study RT, equivalence, and power"
+author: "Przemysław Marcowski"
+date: today
+---
+
+```{r setup}
+#| include: false
+library(tidyverse)
+library(glmmTMB)
+library(emmeans)
+library(car)
+library(here)
+
+here::i_am("analysis/04_robustness.qmd")
+source(here("R/constants.R"))
+source(here("R/utils.R"))
+source(here("R/theme.R"))
+source(here("R/reporting.R"))
+
+set.seed(42)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 8, fig.height = 5)
+
+e1 <- readRDS(here("data/processed/prepared/exp1.Rds"))
+e2 <- readRDS(here("data/processed/prepared/exp2.Rds"))
+trial_rt <- function(d, extra = character()) d %>%
+  group_by(across(all_of(c("participant_id", "affect", extra, "triad_solvable", "trial")))) %>%
+  summarise(rt = first(accuracy_rt), confidence = first(confidence), .groups = "drop")
+```
+
+# Overview
+
+This notebook collects robustness and supplementary analyses that sit on top of the per-study results:
+(1) stimulus norming and the covariate confound test, (2) a sex-moderation check, (3) the cross-study
+reaction-time comparison, (4) equivalence tests for the Study 2 null effects, and (5) simulation-based
+power. The heavier computations live in standalone scripts
+(`scripts/build_norms.R`, `scripts/power_simulation.R`) whose cached outputs are read here.
+
+# Stimulus norming and the covariate confound test {#sec-norming}
+
+Triad words were matched to Polish norms — **ANPW_R** (Imbir, 2016: valence, arousal, imageability,
+concreteness) and **SUBTLEX-PL** (Mandera et al., 2015: frequency, length) — by `scripts/build_norms.R`.
+ANPW_R is a general 4,905-word list (not restricted to affective words), so its affective ratings cover most
+triad words; the affective dimensions are available for 14/15 (Study 1) and 17/18 (Study 2) solvable triads,
+spread evenly across valence conditions.
+
+```{r norming}
+props <- read_csv(here("data/processed/stimulus_properties.csv"), show_col_types = FALSE) %>%
+  filter(role == "solvable") %>%
+  select(triad_solvable = code, valence, arousal, imageability, concreteness, frequency, length)
+
+# Do the lexical/affective properties differ across valence conditions? Tested within each study
+# (the two studies share most solvable triads, so a pooled test would pseudo-replicate).
+prop_tests <- read_csv(here("data/processed/stimulus_properties.csv"), show_col_types = FALSE) %>%
+  filter(role == "solvable") %>%
+  select(study = experiment_id, affect, arousal, imageability, concreteness, frequency, length) %>%
+  pivot_longer(c(arousal, imageability, concreteness, frequency, length), names_to = "property") %>%
+  group_by(study, property) %>%
+  summarise(p_value = summary(aov(value ~ affect))[[1]][["Pr(>F)"]][1], .groups = "drop")
+knitr::kable(prop_tests, digits = 3, caption = "Differences in stimulus properties across valence conditions, within each study (one-way ANOVA).")
+```
+
+Within each study, the conditions did not differ significantly on any measured property (all *p* > .12),
+though these between-item comparisons are underpowered at five to six triads per condition; frequency and
+length nonetheless vary numerically across conditions. The key test is whether the affect effects
+survive controlling for these properties. We fit one covariate
+model per outcome: an affect-only base and an adjusted model adding frequency, length, arousal, and
+imageability, **both on the same covariate-complete triads**, so the before/after comparison is like-for-like.
+
+```{r covariate}
+covariates <- c("frequency", "length", "arousal", "imageability")
+
+# Base and adjusted models use the same complete-case rows.
+covariate_test <- function(study, e, dv) {
+  d <- trial_rt(e) %>% left_join(props, by = "triad_solvable")
+  d$y <- if (dv == "rt") log(d$rt) else d$confidence
+  d <- d %>% filter(!is.na(y), if_all(all_of(covariates), \(x) !is.na(x)))
+  rhs <- paste(sprintf("scale(%s)", covariates), collapse = " + ")
+  base <- glmmTMB(y ~ affect + (1 | participant_id) + (1 | trial), d)
+  cov  <- glmmTMB(as.formula(paste("y ~ affect +", rhs, "+ (1 | participant_id) + (1 | trial)")), d)
+  a0 <- car::Anova(base); a1 <- car::Anova(cov)
+  tibble(study = study, outcome = dv,
+         n_triads = n_distinct(d$triad_solvable), n_trials = nrow(d),
+         chisq_base = a0[rownames(a0) == "affect", "Chisq"],
+         p_base     = a0[rownames(a0) == "affect", "Pr(>Chisq)"],
+         chisq_cov  = a1[rownames(a1) == "affect", "Chisq"],
+         p_cov      = a1[rownames(a1) == "affect", "Pr(>Chisq)"])
+}
+cov_results <- bind_rows(
+  covariate_test("Study 1", e1, "rt"),
+  covariate_test("Study 1", e1, "confidence"),
+  covariate_test("Study 2", e2, "confidence")
+)
+write_csv(cov_results, here("output/tables/covariate_tests.csv"))
+knitr::kable(cov_results, digits = c(0, 0, 0, 0, 2, 4, 2, 4),
+             caption = "Affect omnibus before vs. after adjusting for frequency, length, arousal, and imageability (base and adjusted fit on the same covariate-complete triads).")
+```
+
+The affect effect on response time and confidence remained significant after adjustment, though **attenuated**
+(the omnibus χ² roughly halves) — reduced but not explained by the measured lexical and affective properties.
+Two qualifications: with only five to six triads per condition the affect effect cannot be fully separated
+from unmeasured item idiosyncrasy — resolving that would require more triads per condition than this stimulus
+set provides — and triad-level affective values are means over each triad's ANPW_R-covered words. (Study 2's affect effect is tested here pooling over contrast, which is randomised over
+triads and orthogonal to valence by design.)
+
+# Sex moderation {#sec-sex}
+
+We probed whether participant sex moderates the effects by adding sex and its interactions with the
+manipulations to the behavioural models (accuracy, reaction time, confidence). Male participants are few
+(Study 1 *n* = 11; Study 2 *n* = 6), so these tests are underpowered; a full sex × affect × contrast model
+for Study 2 is singular, so sex is crossed with each manipulation separately.
+
+```{r sex}
+sex_behav <- function(e, extra = character()) e %>%
+  group_by(across(all_of(c("participant_id", "sex", "affect", extra, "trial")))) %>%
+  summarise(accuracy = first(accuracy), rt = first(accuracy_rt), confidence = first(confidence), .groups = "drop")
+b1 <- sex_behav(e1); b2 <- sex_behav(e2, "contrast")
+
+sex_term <- function(d, dv, rhs, study) {
+  d <- d %>% filter(!is.na(.data[[dv]]), !is.na(sex))
+  d$y <- if (dv == "rt") log(d[[dv]]) else d[[dv]]
+  m <- glmmTMB(as.formula(paste("y ~", rhs, "+ (1 | participant_id) + (1 | trial)")), d,
+               family = if (dv == "accuracy") binomial() else gaussian())
+  a <- car::Anova(m, type = 2)
+  keep <- grepl("sex", rownames(a)) & grepl(":", rownames(a))
+  tibble(study = study, outcome = dv, term = rownames(a)[keep],
+         chisq = a[keep, "Chisq"], df = a[keep, "Df"], p_value = a[keep, "Pr(>Chisq)"])
+}
+sex_results <- bind_rows(
+  map_dfr(c("accuracy", "rt", "confidence"), \(dv) sex_term(b1, dv, "affect * sex", "Study 1")),
+  map_dfr(c("accuracy", "rt", "confidence"), \(dv) sex_term(b2, dv, "affect * sex", "Study 2")),
+  map_dfr(c("accuracy", "rt", "confidence"), \(dv) sex_term(b2, dv, "contrast * sex", "Study 2"))
+)
+write_csv(sex_results, here("output/tables/sex_tests.csv"))
+knitr::kable(sex_results, digits = c(0, 0, 0, 2, 0, 3),
+             caption = "Sex-moderation checks: interaction terms involving participant sex in the behavioural models.")
+```
+
+No interaction involving sex approached significance (all *p* > .18), so the affect and contrast effects do
+not vary detectably by participant sex — though the few male participants keep these comparisons underpowered.
+
+# Cross-study reaction time {#sec-crossstudy}
+
+```{r crossstudy}
+pooled <- bind_rows(
+  trial_rt(e1) %>% mutate(study = "Study 1", participant_id = paste0("s1_", participant_id)),
+  trial_rt(e2) %>% mutate(study = "Study 2", participant_id = paste0("s2_", participant_id))
+) %>% filter(!is.na(rt)) %>% mutate(log_rt = log(rt), study = factor(study))
+pooled_model <- glmmTMB(log_rt ~ affect * study + (1 | participant_id) + (1 | trial), pooled)
+crossstudy <- rownames_to_column(as.data.frame(car::Anova(pooled_model)), "term")
+write_csv(crossstudy, here("output/tables/crossstudy_tests.csv"))
+knitr::kable(crossstudy, digits = 3, caption = "Pooled reaction-time model: affect × study.")
+
+# Does the contrast manipulation inflate residual RT variance within Study 2?
+rt2 <- e2 %>% group_by(participant_id, affect, contrast, trial) %>%
+  summarise(log_rt = log(first(accuracy_rt)), .groups = "drop") %>% filter(is.finite(log_rt))
+disp <- anova(glmmTMB(log_rt ~ affect * contrast + (1 | participant_id) + (1 | trial), rt2),
+              glmmTMB(log_rt ~ affect * contrast + (1 | participant_id) + (1 | trial), dispformula = ~ contrast, rt2))
+write_csv(rownames_to_column(as.data.frame(disp), "model"), here("output/tables/dispersion_tests.csv"))
+```
+
+The affect × study interaction is significant — the valence effect on reaction time genuinely differs between
+studies. The dispersion model, however, shows the contrast manipulation did **not** significantly inflate
+reaction-time variance (LRT *p* = `r fmt_n(disp[["Pr(>Chisq)"]][2])`), so an "added variability" account of
+the divergence is not supported and is best treated as speculative.
+
+# Equivalence tests for the Study 2 null effects {#sec-equivalence}
+
+```{r equivalence}
+equiv <- function(dv) {
+  d <- e2 %>% group_by(participant_id, affect, contrast, trial) %>%
+    summarise(y = first(if (dv == "rt") log(accuracy_rt) else confidence), .groups = "drop") %>% filter(!is.na(y))
+  m <- glmmTMB(y ~ affect * contrast + (1 | participant_id) + (1 | trial), d)
+  delta <- sesoi_d * sigma(m)                                  # SESOI in raw units
+  emm <- emmeans(m, ~ contrast)
+  test(contrast(emm, "pairwise"), delta = delta, side = "equivalence") %>%
+    as.data.frame() %>% mutate(outcome = dv, delta = round(delta, 3))
+}
+equiv_results <- bind_rows(equiv("rt"), equiv("confidence"))
+write_csv(equiv_results, here("output/tables/equivalence_tests.csv"))
+knitr::kable(equiv_results %>% select(outcome, contrast, estimate, delta, p.value), digits = 3,
+             caption = "TOST equivalence tests for the contrast effect (SESOI d = 0.46); p < .05 = statistically equivalent to zero.")
+```
+
+# Simulation-based power {#sec-power}
+
+```{r power}
+pf <- here("output/power/power_results.csv")
+if (!file.exists(pf)) {
+  stop("Power cache not found at output/power/power_results.csv — run scripts/power_simulation.R first.",
+       call. = FALSE)
+}
+knitr::kable(read_csv(pf, show_col_types = FALSE) %>% mutate(across(c(power, lower, upper), \(x) round(100 * x, 1))),
+             caption = "Simulation-based power (%) to detect a d = 0.46 effect (simr, 200 simulations).")
+```
+
+Taken together, the Study 2 contrast nulls are interpreted cautiously given the modest power, though the
+equivalence tests point to an absence of contrast effects on response time and confidence.
+
+# Session
+
+```{r session}
+#| code-fold: true
+sessionInfo()
+```

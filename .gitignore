@@ -1,0 +1,36 @@
+# Quarto / R artifacts
+.quarto/
+_freeze/
+**/*_files/
+.Rhistory
+.RData
+.Rproj.user/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS / sync
+.DS_Store
+._*
+
+# Working scratch
+/work/
+
+# Downloaded
+/data/external/
+
+# Raw data
+/data/raw/
+
+# Internal
+/materials/docs/
+
+# Generated output
+/output/
+
+# Publication materials
+/pub/
+
+# Posit deployment metadata
+/docs/.posit/

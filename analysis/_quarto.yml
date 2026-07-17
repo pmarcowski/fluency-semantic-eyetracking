@@ -1,0 +1,45 @@
+project:
+  type: website
+  output-dir: ../docs
+
+website:
+  title: "Fluency in Semantic Coherence Detection"
+  description: "Analysis companion for two eye-tracking studies of processing fluency in intuitive semantic-coherence judgments."
+  navbar:
+    background: primary
+    left:
+      - text: "Findings"
+        href: index.qmd
+      - text: "Preprocessing"
+        href: 01_preprocessing.qmd
+      - text: "Study 1"
+        href: 02_study1.qmd
+      - text: "Study 2"
+        href: 03_study2.qmd
+      - text: "Robustness"
+        href: 04_robustness.qmd
+      - text: "Data & pipeline"
+        href: data-pipeline.qmd
+    right:
+      - text: "OSF"
+        href: https://osf.io/8ks5w
+  page-footer:
+    center: "Fluency in Semantic Coherence Detection — analysis companion"
+
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: true
+    code-tools: true
+    df-print: paged
+    embed-resources: true
+    theme: cosmo
+    fig-width: 8
+    fig-height: 5
+
+execute:
+  warning: false
+  message: false
+  freeze: false

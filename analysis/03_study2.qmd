@@ -1,0 +1,278 @@
+---
+title: "Study 2 — Emotional valence and visual contrast"
+subtitle: "Does perceptual fluency shape intuitive coherence judgments like affective fluency?"
+author: "Przemysław Marcowski"
+date: today
+---
+
+```{r setup}
+#| include: false
+library(tidyverse)
+library(eyetrackingR)
+library(glmmTMB)
+library(emmeans)
+library(performance)
+library(rmcorr)
+library(patchwork)
+library(here)
+
+here::i_am("analysis/03_study2.qmd")
+source(here("R/constants.R"))
+source(here("R/utils.R"))
+source(here("R/theme.R"))
+source(here("R/reporting.R"))
+
+set.seed(42)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 9, fig.height = 6)
+out_dir <- here("output", "exp2"); dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r data}
+e2 <- readRDS(here("data/processed/prepared/exp2.Rds"))
+
+behav <- e2 %>%
+  group_by(participant_id, triad_solvable, affect, contrast, trial) %>%
+  summarise(accuracy = first(accuracy), rt = first(accuracy_rt),
+            confidence = first(confidence), .groups = "drop")
+```
+
+# Overview
+
+Study 2 crossed **emotional valence** (Negative, Neutral, Positive) with **visual contrast** (a *perceptual*
+fluency source: the solvable triad, the nonsolvable triad, both, or neither shown in high contrast). If all
+fluency sources act alike, contrast should shape response time and confidence as valence did in Study 1. The
+analysed sample is *N* = `r n_distinct(behav$participant_id)`.
+
+::: {.callout-note}
+## Model specification
+Omnibus effects use **Type III tests** (`emmeans::joint_tests()`, invariant to contrast coding) on
+`affect * contrast` models with by-participant and by-position random intercepts; the maximal
+by-participant slope is singular and is not retained.
+:::
+
+```{r helpers}
+cohen_d <- function(model, contrasts) emm_df(contrasts) %>% mutate(d = estimate / sigma(model))
+```
+
+## Accuracy (H1)
+
+```{r accuracy}
+acc_data <- behav %>% filter(!is.na(accuracy))
+acc_tests <- acc_data %>%
+  group_by(affect, contrast) %>%
+  summarise(successes = sum(accuracy), trials = n(), prop = successes / trials,
+            p_value = binom.test(successes, trials, 0.5, "greater")$p.value, .groups = "drop")
+acc_model <- glmmTMB(accuracy ~ affect * contrast + (1 | participant_id) + (1 | trial),
+                     data = acc_data, family = binomial)
+acc_omnibus <- joint_tests(acc_model)
+write_csv(acc_tests, file.path(out_dir, "accuracy_tests.csv"))
+write_csv(acc_omnibus, file.path(out_dir, "accuracy_effects.csv"))
+knitr::kable(acc_omnibus, digits = 3, caption = "Accuracy: Type III omnibus tests.")
+```
+
+Accuracy was again at ceiling (all conditions above chance, all *p*s < .001) and unaffected by valence,
+contrast, or their interaction (all *p*s > .05).
+
+## Response time (H2)
+
+```{r rt}
+rt_data <- behav %>% filter(!is.na(rt)) %>% mutate(log_rt = log(rt))
+rt_model <- glmmTMB(log_rt ~ affect * contrast + (1 | participant_id) + (1 | trial), data = rt_data)
+rt_omnibus <- joint_tests(rt_model)
+rt_emm <- emmeans(rt_model, ~ affect | contrast)
+rt_contrasts <- cohen_d(rt_model, summary(contrast(rt_emm, "pairwise", adjust = "fdr"), infer = TRUE))
+write_csv(rt_omnibus, file.path(out_dir, "rt_effects.csv"))
+write_csv(emm_df(rt_emm), file.path(out_dir, "rt_means.csv"))
+write_csv(rt_contrasts, file.path(out_dir, "rt_contrasts.csv"))
+knitr::kable(rt_omnibus, digits = 3, caption = "Response time: Type III omnibus tests.")
+```
+
+Neither valence, contrast, nor their interaction significantly affected response time (see table). Contrary to
+the perceptual-fluency prediction, high contrast did not speed responses, and the affect effect seen in
+Study 1 did not clearly replicate here.
+
+## Confidence (H3)
+
+```{r confidence}
+conf_data <- behav %>% filter(!is.na(confidence))
+conf_model <- glmmTMB(confidence ~ affect * contrast + (1 | participant_id) + (1 | trial), data = conf_data)
+conf_omnibus <- joint_tests(conf_model)
+conf_emm <- emmeans(conf_model, ~ affect | contrast)
+conf_contrasts <- cohen_d(conf_model, summary(contrast(conf_emm, "pairwise", adjust = "fdr"), infer = TRUE))
+write_csv(conf_omnibus, file.path(out_dir, "confidence_effects.csv"))
+write_csv(emm_df(conf_emm), file.path(out_dir, "confidence_means.csv"))
+write_csv(conf_contrasts, file.path(out_dir, "confidence_contrasts.csv"))
+knitr::kable(conf_omnibus, digits = 3, caption = "Confidence: Type III omnibus tests.")
+```
+
+```{r confidence-slopes}
+# The maximal by-participant slope model is singular, so the reported models use
+# random intercepts.
+conf_slope_model <- glmmTMB(confidence ~ affect * contrast + (affect | participant_id) + (1 | trial),
+                            data = conf_data)
+performance::check_singularity(conf_slope_model)
+```
+
+Valence again shaped confidence (a main effect of affect), partially replicating Study 1, whereas contrast and
+the affect × contrast interaction did not.
+
+## Gaze preference (H4)
+
+```{r gca}
+tsd <- make_time_sequence_data(e2, time_bin_size = bin_size, aois = c("Solvable", "Nonsolvable"),
+                               predictor_columns = c("affect", "contrast"),
+                               summarize_by = c("participant_id", "trial"))
+preference <- tsd %>%
+  pivot_wider(id_cols = c(participant_id, trial, affect, contrast, Time, ot1:ot4),
+              names_from = AOI, values_from = SamplesInAOI, names_prefix = "looks_") %>%
+  mutate(total = looks_Solvable + looks_Nonsolvable,
+         preference = (looks_Solvable - looks_Nonsolvable) / total) %>%
+  filter(total > 0)
+# The correlated time-slope block exceeds the default evaluation limits, so the
+# optimizer budget is enlarged.
+gca <- glmmTMB(preference ~ affect * contrast * (ot1 + ot2 + ot3 + ot4) +
+                 (1 + ot1 + ot2 + ot3 + ot4 | participant_id) + (1 | trial),
+               data = preference, weights = total,
+               control = glmmTMBControl(optCtrl = list(iter.max = 2000, eval.max = 2000)))
+gca_omnibus <- joint_tests(gca)
+gca_emm <- emmeans(gca, ~ affect | contrast)
+gca_contrasts <- cohen_d(gca, summary(contrast(gca_emm, "pairwise", adjust = "fdr"), infer = TRUE))
+write_csv(gca_omnibus, file.path(out_dir, "preference_effects.csv"))
+write_csv(emm_df(gca_emm), file.path(out_dir, "preference_means.csv"))
+write_csv(gca_contrasts, file.path(out_dir, "preference_contrasts.csv"))
+```
+
+The gaze bias toward the solvable triad was modulated by both valence and contrast, with a significant
+affect × contrast interaction — perceptual salience shifted overt attention even though it did not move the
+metacognitive measures, suggesting a dissociation between attentional capture and the felt sense of coherence.
+
+```{r figures}
+#| fig-width: 14
+#| fig-height: 9.3
+# Six-panel layout (a–f), 2 × 2 contrast facets.
+lab <- labeller(contrast = contrast_labels)
+affect_abbrev <- c(Negative = "Neg", Neutral = "Neu", Positive = "Pos")
+
+p_acc <- acc_data %>% group_by(participant_id, affect, contrast) %>%
+  summarise(prob = mean(accuracy), .groups = "drop") %>%
+  ggplot(aes(affect, prob, fill = affect)) +
+  geom_col(data = acc_tests, aes(y = prop), width = 0.6, colour = "black") +
+  geom_jitter(width = 0.1, alpha = 0.25, shape = 1, size = 0.8) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  facet_wrap(~ contrast, labeller = lab, nrow = 2) +
+  scale_fill_manual(values = affect_colours, guide = "none") +
+  scale_x_discrete(labels = affect_abbrev) +
+  labs(title = "Response accuracy", x = "Word affect", y = "P(correct)")
+
+p_rt <- ggplot(rt_data, aes(affect, log_rt)) +
+  geom_violin(aes(fill = affect), alpha = 0.3, trim = FALSE) +
+  geom_jitter(width = 0.08, alpha = 0.12, shape = 1, size = 0.7) +
+  geom_errorbar(data = emm_df(rt_emm), aes(y = emmean, ymin = lower.CL, ymax = upper.CL), width = 0.15) +
+  geom_point(data = emm_df(rt_emm), aes(y = emmean), size = 2.5, shape = 18) +
+  facet_wrap(~ contrast, labeller = lab, nrow = 2) +
+  scale_fill_manual(values = affect_colours, guide = "none") +
+  scale_x_discrete(labels = affect_abbrev) +
+  labs(title = "Response times", x = "Word affect", y = "log(RT)")
+
+p_conf <- ggplot(emm_df(conf_emm), aes(affect, emmean, fill = affect)) +
+  geom_col(width = 0.6, colour = "black") +
+  geom_jitter(data = conf_data, aes(affect, confidence), inherit.aes = FALSE,
+              width = 0.1, alpha = 0.12, shape = 1, size = 0.7) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2) +
+  facet_wrap(~ contrast, labeller = lab, nrow = 2) +
+  scale_fill_manual(values = affect_colours, guide = "none") +
+  scale_x_discrete(labels = affect_abbrev) +
+  labs(title = "Confidence ratings", x = "Word affect", y = "Response confidence")
+
+p_time <- ggplot(preference, aes(Time, preference, colour = affect, fill = affect)) +
+  stat_summary(geom = "ribbon", fun.data = mean_se, colour = NA, alpha = 0.15) +
+  stat_summary(geom = "line", fun = mean, linewidth = 0.9) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~ contrast, labeller = lab, nrow = 2) +
+  scale_colour_manual(values = affect_colours) + scale_fill_manual(values = affect_colours) +
+  labs(title = "Timecourse of gaze preference", x = "Time in trial (s)", y = "Preference score",
+       colour = "Word affect", fill = "Word affect")
+
+p_pref <- ggplot(emm_df(gca_emm), aes(affect, emmean, fill = affect)) +
+  geom_col(width = 0.6, colour = "black") +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2) +
+  facet_wrap(~ contrast, labeller = lab, nrow = 2) +
+  scale_fill_manual(values = affect_colours, guide = "none") +
+  scale_x_discrete(labels = affect_abbrev) +
+  labs(title = "Marginal gaze preference", x = "Word affect", y = "Preference score")
+
+contr_plot <- gca_contrasts %>%
+  rename(pair = 1) %>%
+  mutate(pair = pair %>% gsub("Negative", "Neg", x = .) %>% gsub("Neutral", "Neu", x = .) %>%
+           gsub("Positive", "Pos", x = .),
+         sig = as.character(sig_stars(p.value)))
+p_contr <- ggplot(contr_plot, aes(estimate, pair)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_pointrange(aes(xmin = lower.CL, xmax = upper.CL), size = 0.3) +
+  geom_text(aes(label = sig), vjust = -0.9, size = 3) +
+  facet_wrap(~ contrast, labeller = lab, nrow = 2) +
+  scale_x_continuous(n.breaks = 3) +
+  labs(title = "Gaze preference contrasts", x = "Difference in preference score", y = "Contrast")
+
+figure <- (p_acc | p_rt | p_conf) / (p_time | p_pref | p_contr) + plot_annotation(tag_levels = "a")
+ggsave(file.path(out_dir, "figure.png"), figure, width = 14, height = 9.3, dpi = 300)
+figure
+```
+
+## Correlations
+
+```{r correlations}
+inspect <- e2 %>%
+  group_by(participant_id, affect, contrast, trial) %>%
+  summarise(inspection = sum(Solvable, na.rm = TRUE),
+            accuracy = first(accuracy), confidence = first(confidence), .groups = "drop")
+conf_rm <- inspect %>% filter(!is.na(confidence)) %>% mutate(participant_id = factor(participant_id)) %>%
+  rmcorr(participant_id, inspection, confidence, dataset = .)
+correlations <- tibble(
+  analysis = "confidence ~ inspection (rmcorr)",
+  estimate = conf_rm$r, ci_low = conf_rm$CI[1], ci_high = conf_rm$CI[2], p_value = conf_rm$p)
+write_csv(correlations, file.path(out_dir, "correlations.csv"))
+```
+
+As in Study 1, longer inspection of the solvable triad was associated with **lower** confidence (rmcorr *r* =
+`r fmt_n(conf_rm$r)`, *p* `r fmt_p(conf_rm$p)`).
+
+## Supplementary tables {#sec-supplementary}
+
+```{r supplementary}
+# Raw condition-level descriptives complementing the model-based estimates above.
+descriptives <- behav %>%
+  pivot_longer(c(accuracy, rt, confidence), names_to = "outcome") %>%
+  filter(!is.na(value)) %>%
+  group_by(outcome, affect, contrast) %>%
+  summarise(n = n(), mean = mean(value), sd = sd(value), se = sd / sqrt(n), .groups = "drop")
+write_csv(descriptives, file.path(out_dir, "descriptives.csv"))
+
+# Specification and fit diagnostics for every model reported above.
+re_sd <- function(m, group) {
+  v <- VarCorr(m)$cond[[group]]
+  if (is.null(v)) NA_real_ else attr(v, "stddev")[[1]]
+}
+models <- list(accuracy = acc_model, rt = rt_model, confidence = conf_model, gaze_gca = gca)
+model_summary <- imap_dfr(models, \(m, name) tibble(
+  model = name,
+  formula = deparse1(formula(m)),
+  family = family(m)$family,
+  n_obs = nobs(m),
+  n_participants = n_distinct(model.frame(m)$participant_id),
+  sd_participant_intercept = re_sd(m, "participant_id"),
+  sd_trial_intercept = re_sd(m, "trial"),
+  converged = isTRUE(performance::check_convergence(m)),
+  singular_fit = isTRUE(performance::check_singularity(m))))
+write_csv(model_summary, file.path(out_dir, "model_summary.csv"))
+knitr::kable(model_summary, digits = 3,
+             caption = "Model specifications and fit diagnostics; a singular fit reflects a variance component estimated at zero (see the SD columns).")
+knitr::kable(descriptives, digits = 3, caption = "Raw condition-level descriptives (means, SD, SE).")
+```
+
+# Session
+
+```{r session}
+#| code-fold: true
+sessionInfo()
+```

@@ -1,0 +1,8 @@
+* text=auto
+*.csv -text
+*.Rds binary
+*.hdf5 binary
+*.png binary
+*.xlsx binary
+*.docx binary
+*.DOCX binary

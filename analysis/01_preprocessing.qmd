@@ -1,0 +1,190 @@
+---
+title: "Preprocessing — Dyads-of-Triads fluency eye-tracking"
+subtitle: "From raw gaze + behavioral records to analysis-ready datasets"
+author: "Przemysław Marcowski"
+date: today
+---
+
+```{r setup}
+#| include: false
+library(tidyverse)
+library(eyetrackingR)
+library(here)
+
+here::i_am("analysis/01_preprocessing.qmd")
+source(here("R/constants.R"))
+source(here("R/aoi_definitions.R"))
+source(here("R/utils.R"))
+source(here("R/theme.R"))
+source(here("R/reporting.R"))
+
+set.seed(42)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+# Overview
+
+This notebook turns the extractor's outputs into the analysis-ready eye-tracking datasets used by
+the Study 1 and Study 2 notebooks. The raw eye-tracking (`.hdf5`) and behavioral (`.csv`) records are
+first combined into per-sample tables by `scripts/extract_data.py`; here we add gaze quality control,
+areas of interest, and the response-window subset.
+
+- **Inputs:** `data/processed/labelled/exp{1,2}.csv` (gaze samples) and `…/behavioral/exp{1,2}.csv`
+  (per-trial behavior), plus `…/stimuli.csv`.
+- **Outputs:** `data/processed/prepared/exp{1,2}.Rds` — an `eyetrackingR` object per study.
+
+The pipeline, per study:
+
+1. **Combine** gaze with behavior on `(participant, trial, event)`, keeping each participant's last run.
+2. **Binocular gaze**: average the two eyes when both are valid, fall back to the single valid eye, and
+   flag track loss otherwise — an eye is valid when its coordinates fall within the screen (± a 10% margin).
+3. **Interpolate** gaps in gaze coordinates up to `r max_gap_s * 1000` ms; longer gaps stay track loss.
+4. **Remove outliers**: reaction times beyond 1.5 × IQR (per participant) and gaze coordinates beyond the
+   97.5th Mahalanobis percentile (per trial).
+5. **Assign AOIs** for the solvable and nonsolvable triads, restrict to the 10 s response window, and
+   exclude trials/participants with more than `r scales::percent(track_exclude_prop)` track loss.
+
+::: {.callout-note}
+## Gaze quality control
+Gaze validity uses a coordinate-plausibility check (samples with implausible off-screen coordinates are
+flagged as track loss) with a best-available-eye fallback; short gaps in the gaze coordinates are
+interpolated (capped at `r max_gap_s * 1000` ms) and longer gaps are left as track loss.
+:::
+
+```{r prepare-fn}
+prepare_experiment <- function(name, n_trials, has_contrast) {
+  ct <- cols(participant_id = col_character(), .default = col_guess())
+  gaze <- read_csv(here("data/processed/labelled", paste0(name, ".csv")), col_types = ct)
+  beh  <- read_csv(here("data/processed/behavioral", paste0(name, ".csv")), col_types = ct)
+
+  combined <- combine_gaze_behavioral(gaze, beh, n_trials)
+  n_joined <- n_distinct(combined$participant_id)
+
+  # Binocular gaze (best-available eye) in screen pixels, with a track-loss flag.
+  xy <- compute_binocular_gaze(combined$left_gaze_x, combined$left_gaze_y,
+                               combined$right_gaze_x, combined$right_gaze_y,
+                               screen_width, screen_height, gaze_margin)
+  combined <- combined %>%
+    bind_cols(xy) %>%
+    mutate(
+      affect = factor(affect, levels = affect_levels),
+      sex    = factor(case_when(sex == "k" ~ "Female", sex == "m" ~ "Male", TRUE ~ "Other")),
+      Target = side_solve
+    )
+  if (has_contrast) {
+    # Contrast condition, relative to the solvable triad (black = high contrast).
+    combined <- combined %>%
+      mutate(contrast = factor(case_when(
+        side_contrast == "Both"        ~ "Both",
+        side_contrast == "Neither"     ~ "None",
+        side_contrast == side_solve    ~ "Solvable",
+        TRUE                           ~ "Nonsolvable"
+      ), levels = contrast_levels))
+  }
+
+  # Time from trial onset (s) + capped interpolation of gaze within each trial.
+  combined <- combined %>%
+    group_by(participant_id, trial) %>%
+    mutate(
+      time_from_onset = time - min(time),
+      gaze_x = interpolate_coordinate(gaze_x, time_from_onset, max_gap_s),
+      gaze_y = interpolate_coordinate(gaze_y, time_from_onset, max_gap_s),
+      trackloss = is.na(gaze_x) | is.na(gaze_y)
+    ) %>%
+    ungroup()
+
+  # Remove RT outliers (per participant) and gaze-coordinate outliers (per trial).
+  combined <- combined %>%
+    group_by(participant_id) %>%
+    mutate(rt_outlier = identify_rt_outliers(accuracy_rt, trial)) %>%
+    ungroup() %>%
+    group_by(participant_id, trial) %>%
+    mutate(gaze_outlier = identify_gaze_outliers(gaze_x, gaze_y)) %>%
+    ungroup() %>%
+    filter(!(rt_outlier %in% TRUE), !gaze_outlier) %>%
+    select(-rt_outlier, -gaze_outlier)
+
+  # Areas of interest (the solvable/nonsolvable boxes follow the solvable side).
+  combined <- combined %>%
+    mutate(Trial = Target) %>%
+    add_aoi(aoi_box_solvable, "gaze_x", "gaze_y", "Solvable", "Left", "Right", "Top", "Bottom") %>%
+    add_aoi(aoi_box_nonsolvable, "gaze_x", "gaze_y", "Nonsolvable", "Left", "Right", "Top", "Bottom") %>%
+    select(-Trial)
+
+  # eyetrackingR object, response window, and track-loss-based exclusion.
+  item_cols <- if (has_contrast) c("affect", "contrast") else "affect"
+  et <- make_eyetrackingr_data(
+    combined,
+    participant_column = "participant_id", trial_column = "trial",
+    item_columns = item_cols, time_column = "time_from_onset",
+    trackloss_column = "trackloss", aoi_columns = c("Solvable", "Nonsolvable"),
+    treat_non_aoi_looks_as_missing = FALSE
+  )
+  et <- subset_by_window(et, window_start_time = 0, window_end_time = 10, remove = TRUE)
+  trackloss <- trackloss_analysis(et)
+  et <- clean_by_trackloss(et, trial_prop_thresh = track_exclude_prop,
+                           participant_prop_thresh = track_exclude_prop)
+
+  list(data = et, trackloss = trackloss, n_joined = n_joined)
+}
+```
+
+```{r run}
+studies <- tribble(
+  ~name,   ~label,    ~n_trials, ~has_contrast,
+  "exp1",  "Study 1", 15L,       FALSE,
+  "exp2",  "Study 2", 18L,       TRUE
+)
+
+prepared <- studies %>%
+  mutate(result = pmap(list(name, n_trials, has_contrast), prepare_experiment))
+
+# Persist the analysis-ready datasets.
+walk2(prepared$name, prepared$result,
+      \(name, res) saveRDS(res$data, here("data/processed/prepared", paste0(name, ".Rds"))))
+```
+
+# Sample and quality
+
+```{r sample}
+sample_table <- prepared %>%
+  mutate(summary = map(result, \(res) {
+    d <- res$data
+    per_pp <- d %>% distinct(participant_id, sex, age)
+    tibble(
+      `Joined`      = res$n_joined,
+      `Analysed N`  = nrow(per_pp),
+      `Female`      = sum(per_pp$sex == "Female"),
+      `Male`        = sum(per_pp$sex == "Male"),
+      `Age M (SD)`  = sprintf("%.1f (%.1f)", mean(per_pp$age), sd(per_pp$age)),
+      `Track loss`  = scales::percent(mean(res$trackloss$TracklossForParticipant, na.rm = TRUE), 0.1)
+    )
+  })) %>%
+  select(Study = label, summary) %>%
+  unnest(summary)
+
+knitr::kable(sample_table, caption = "Sample composition and mean track loss, by study.")
+```
+
+After the gaze × behavior join, trials with more than `r scales::percent(track_exclude_prop)` track loss and
+participants exceeding the same threshold overall are excluded, giving analysed samples of N =
+`r sample_table$"Analysed N"[1]` (Study 1) and N = `r sample_table$"Analysed N"[2]` (Study 2). In Study 2,
+this criterion excludes two participants whose eye-tracking records contain essentially no valid gaze.
+
+::: {.callout-note}
+## Display and measurement parameters
+- **Display**: two triads on a 1920 × 1080 screen; AOIs are 400 × 300 px boxes centred on each triad
+  (`x ∈ [310, 710]` / `[1210, 1610]`, `y ∈ [390, 690]`).
+- **Recording**: gaze sampled at 60 Hz (Tobii) from a viewing distance of ≈ 600 mm.
+- **Interpolation** is applied to gaze coordinates (x, y) only — not pupil size, which was recorded but not
+  analysed — and only across gaps ≤ `r max_gap_s * 1000` ms.
+- **Preference score** (computed in the analysis notebooks) divides looks to the solvable AOI minus the
+  nonsolvable AOI by their sum; samples outside both AOIs are excluded from the numerator and denominator.
+:::
+
+# Session
+
+```{r session}
+#| code-fold: true
+sessionInfo()
+```

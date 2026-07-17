@@ -1,0 +1,78 @@
+---
+title: "Findings"
+---
+
+A results overview for the two-study eye-tracking investigation of processing fluency in
+intuitive semantic-coherence judgments (Dyads-of-Triads task). Study 1 manipulates the emotional
+**valence** of the solvable triad (a semantic fluency source); Study 2 crosses valence with visual
+**contrast** (a perceptual fluency source). Outcomes: accuracy, response time, confidence, and
+gaze preference. Analysed samples: *N* = 39 (Study 1), *N* = 45 (Study 2). Full detail is in the
+per-study analysis pages linked in the navigation bar; per-condition estimates are in the deposited
+`output/` tables.
+
+## Headline
+
+Objective accuracy is stable at ceiling and unmoved by either manipulation, while subjective
+experience is not: **affective** fluency (positive valence) speeds responses and raises confidence,
+whereas **perceptual** fluency (visual contrast) moves neither. Fluency sources therefore do not
+translate equivalently into metacognitive experience — the affective quality of a source, not
+processing ease alone, drives its effect on intuitive judgment.
+
+## Study 1 — emotional valence
+
+- **Accuracy (H1).** At ceiling in every condition (Negative .90, Neutral .94, Positive .92; all
+  above chance *p* < .001) and unaffected by valence, χ²(2) = 1.63, *p* = .443. The null is
+  constrained by the ceiling.
+- **Response time (H2).** Valence sped responses, χ²(2) = 17.96, *p* < .001: positive-solution
+  triads were fastest, faster than negative (*c* = 0.10, *p* = .001, *d* = 0.38) and neutral
+  (*c* = 0.12, *p* < .001, *d* = 0.45); negative vs. neutral did not differ.
+- **Confidence (H3).** Valence raised confidence, χ²(2) = 13.70, *p* = .001: positive highest
+  (*M* = 8.25) vs. negative (7.60; *d* = 0.34) and neutral (7.49; *d* = 0.39).
+- **Gaze preference (H4).** A growth-curve analysis showed a valence main effect, χ²(2) = 7.58,
+  *p* = .023, and valence × time interactions across all polynomial terms (*p* < .001): valence
+  modulates the *time course* of the bias toward the solvable triad. Overall pairwise differences
+  between conditions were not significant.
+- **Inspection time.** Longer inspection of the solvable triad went with *lower* confidence
+  (repeated-measures *r* = −.18, *p* < .001), consistent with a decision-difficulty account; it did
+  not predict accuracy.
+
+## Study 2 — valence × contrast
+
+- **Accuracy (H1).** Again at ceiling (all conditions > 86%, above chance *p* < .001); no effect of
+  valence, contrast, or their interaction.
+- **Response time (H2).** No effect of valence (χ²(2) = 2.71, *p* = .258), contrast
+  (χ²(3) = 1.43, *p* = .698), or their interaction (χ²(6) = 10.94, *p* = .090).
+- **Confidence (H3).** Valence again raised confidence — a main effect, χ²(2) = 18.02, *p* < .001,
+  partially replicating Study 1 — while contrast and the interaction did not.
+- **Gaze preference (H4).** Both factors modulated gaze, with a valence × contrast interaction (all
+  χ² *p* < .001): perceptual salience shifted overt attention even though it did not move the
+  metacognitive measures — a dissociation between attentional capture and the felt sense of
+  coherence.
+- **Inspection time.** As in Study 1, longer inspection went with lower confidence (*r* = −.27,
+  *p* < .001).
+
+## Robustness and boundary conditions
+
+- **Evidence for the contrast nulls.** Equivalence tests (TOST, SESOI *d* = 0.46) find the contrast
+  effect statistically equivalent to zero for all response-time contrasts and for five of six
+  confidence contrasts (none–both marginal, *p* = .051) — pointing to an absence of contrast effects.
+  Simulation-based power shows the Study 2 contrast analyses were only modestly powered (37.5–49% at
+  the SESOI), so the nulls are interpreted cautiously.
+- **Cross-study divergence.** The valence effect on response time differs between studies
+  (valence × study interaction, χ²(2) = 7.66, *p* = .022); a dispersion model does not support the
+  contrast manipulation inflating response-time variance (*p* = .69).
+- **Stimulus confounds.** Controlling simultaneously for frequency, length, arousal, and
+  imageability (SUBTLEX-PL; ANPW_R), the valence effects remain significant but attenuated — Study 1
+  response time χ²(2) = 23.05 → 11.77 (*p* = .003), confidence χ²(2) = 15.40 → 6.69 (*p* = .035); Study 2
+  confidence χ²(2) = 17.24 → 6.58 (*p* = .037).
+- **Item-level caveat.** With five (Study 1) or six (Study 2) triads per condition, valence cannot
+  be fully separated from unmeasured item idiosyncrasy; larger stimulus sets would be needed to
+  resolve this. The effects are robust to the measured item properties above.
+
+## Interpretation
+
+Intuitive coherence judgment separates into a stable detection process (accuracy) and a malleable
+metacognitive evaluation (response time, confidence, gaze). Affective fluency shapes the latter;
+perceptual fluency does not — challenging the assumption that any source of processing ease yields
+an equivalent metacognitive signal, and pointing to the felt, affective quality of fluency as the
+active ingredient.

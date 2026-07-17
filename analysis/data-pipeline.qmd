@@ -1,0 +1,76 @@
+---
+title: "Data pipeline and dictionary"
+---
+
+How raw records become analysis-ready datasets, and what every field means. The pipeline has three
+stages: **extract** (Python) → **preprocess** (`analysis/01_preprocessing.qmd`) → **analyse**
+(`analysis/02–04`).
+
+## Task
+
+Each trial shows **two triads of words** side by side. One triad is *solvable* (its three words share a
+remote associate, e.g. *woda · płuca · kamień* → *kamień*-themed); the other is *nonsolvable*. The
+participant picks the solvable triad (keys `q`/`p` = left/right), rates confidence (0–10), then guesses the
+associate. Study 1 manipulates the solvable triad's affective **valence** (Negative/Neutral/Positive); Study 2
+additionally manipulates **contrast** (which triad is shown in high-contrast black vs. low-contrast grey).
+
+## Stage 1 — extract (`scripts/extract_data.py`)
+
+Reads the raw records directly and labels gaze with trials. **Intent**: turn per-session iohub samples + the
+PsychoPy behavioral log into tidy, per-trial tables, keyed consistently by participant.
+
+Inputs:
+- `data/raw/eyetracking/exp{1,2*}.hdf5` — iohub HDF5. Uses `BinocularEyeSampleEvent` (per-eye gaze in
+  PsychoPy centred pixels, `status`, pupil — pupil unused), `MessageEvent` (`start:<id>` / `end:<id>` trial
+  markers; `validation` = calibration check), and `session_meta_data` (`session_id` → participant `name`).
+- `data/raw/behavioral/exp{1,2}/…csv` — one PsychoPy log per participant.
+
+Extraction rules:
+- **Participant id = the filename code** (zero-padded), which matches the iohub session name. The CSV
+  `participant` field is unreliable and is not used.
+- **Confidence = the integer 0–10 in `ocena_1.text`** (decision confidence). The textbox is noisy in Study 2
+  (stray keystrokes), so the embedded digit is extracted; trials without one are missing.
+- `acc = 9` (no response in the 10 s window) → accuracy/RT/confidence missing.
+- Each `validation` marker starts a new **block** (run); Stage 2 resolves restarts by keeping each
+  participant's last block.
+
+Outputs (`data/processed/`):
+- `labelled/exp{1,2}.csv` — one row per gaze sample: `participant_id, [condition,] block, trial, event,
+  time, left/right_gaze_x/y, status`.
+- `behavioral/exp{1,2}.csv` — one row per trial: `experiment_id, participant_id, [condition,] block, trial,
+  event, triad_solvable, affect, side_solve, [side_contrast,] accuracy, accuracy_rt, confidence, solution,
+  sex, age`.
+- `stimuli.csv` — one row per triad: `experiment_id, code, role (solvable/nonsolvable), affect, word_1..3`.
+
+## Stage 2 — preprocess (`analysis/01_preprocessing.qmd`)
+
+**Intent**: join the two streams, build clean gaze with areas of interest, and exclude poor-quality data.
+
+1. **Combine** gaze + behavioral on `(participant, [condition,] trial, event)`, keeping each participant's
+   last block.
+2. **Binocular gaze** (`compute_binocular_gaze`): average both eyes when valid, else the single valid eye,
+   else track loss — an eye is valid when within the screen ± 10%. Transform to screen pixels.
+3. **Interpolate** gaps ≤ 100 ms; longer gaps stay track loss.
+4. **Outliers**: RT beyond 1.5 × IQR (per participant), gaze beyond the 97.5th Mahalanobis percentile
+   (per trial).
+5. **AOIs**: 400 × 300 px boxes over each triad (`x ∈ [310,710]`/`[1210,1610]`, `y ∈ [390,690]`), following
+   the solvable side; restrict to the 0–10 s window; exclude trials and participants with > 40% track loss.
+
+Output: `data/processed/prepared/exp{1,2}.Rds` — an `eyetrackingR` object (analysed *N* = 39 / 45).
+
+## Stage 3 — analyse (`analysis/02–04`)
+
+- `02_study1.qmd`, `03_study2.qmd` — accuracy (binomial), RT (log-Gaussian), confidence (Gaussian), and gaze
+  preference (growth-curve analysis); Type III omnibus tests, FDR contrasts, effect sizes.
+- `04_robustness.qmd` — stimulus norming + covariate confound test, sex moderation, cross-study RT,
+  equivalence tests for the Study 2 nulls, simulation-based power.
+
+**Preference score** (per time bin): `(looks_Solvable − looks_Nonsolvable) / (looks_Solvable +
+looks_Nonsolvable)`; samples outside both AOIs are excluded from numerator and denominator.
+
+## Note on validity
+
+The pipeline applies the track-loss exclusions described above; two Study 2 participants with essentially
+no valid gaze are excluded, so the analysed samples are *N* = 39 (Study 1) and *N* = 45 (Study 2).
+Stimulus-side robustness checks (norming-based covariate adjustment of the valence effects) are
+reported in `analysis/04_robustness.qmd`.
