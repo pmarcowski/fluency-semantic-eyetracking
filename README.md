@@ -6,8 +6,14 @@ intuitive semantic-coherence judgments in the **Dyads-of-Triads** task. Study 1 
 *perceptual* fluency source). Outcomes: accuracy, response time, confidence, and gaze preference.
 
 Data and analysis code are available on OSF: <https://osf.io/8ks5w>. The raw recordings are deposited separately in the study data repository
-(see the manuscript's Data availability statement); this repository is reproducible from
+(see the paper's Data availability statement); this repository is reproducible from
 `data/processed/` onward, or place the raw files under `data/raw/` to re-run extraction.
+
+## Citation
+
+Sweklej, J., Balas, R., Marcowski, P., & Żuk, D. (2026). Fluency in semantic coherence detection:
+Insights from response times, confidence, and eye movements. *Consciousness and Cognition*, *145*,
+Article 104122. <https://doi.org/10.1016/j.concog.2026.104122>
 
 ## Layout
 
