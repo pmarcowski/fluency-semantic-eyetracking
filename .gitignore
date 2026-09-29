@@ -29,8 +29,5 @@ __pycache__/
 # Generated output
 /output/
 
-# Publication materials
-/pub/
-
 # Posit deployment metadata
 /docs/.posit/
